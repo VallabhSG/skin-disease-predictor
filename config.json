@@ -1,0 +1,16 @@
+{
+  "model_type": "idefics3",
+  "architectures": ["Idefics3ForConditionalGeneration"],
+  "torch_dtype": "float32",
+  "vision_config": {
+    "image_size": 224,
+    "patch_size": 16,
+    "num_channels": 3,
+    "hidden_size": 768
+  },
+  "text_config": {
+    "hidden_size": 768,
+    "num_attention_heads": 12,
+    "num_hidden_layers": 12
+  }
+}
