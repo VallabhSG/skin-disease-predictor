@@ -2,56 +2,68 @@ import gradio as gr
 import torch
 from PIL import Image
 import numpy as np
-from transformers import AutoProcessor, AutoModelForCausalLM
+from transformers import Idefics3Processor, Idefics3ForConditionalGeneration
 
-# Load model and processor
+# Global model variables - lazy loaded
 model_id = "KeerthiKeswaran/SmolVLM-SkinCAP"
+processor = None
+model = None
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-print(f"Loading model on device: {device}")
-processor = AutoProcessor.from_pretrained(model_id)
-model = AutoModelForCausalLM.from_pretrained(
-    model_id,
-    torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-    device_map="auto" if device == "cuda" else None
-)
-
-if device == "cpu":
-    model.to(device)
+def load_model():
+    """Load model on first use to avoid startup errors"""
+    global processor, model, device
+    if model is None:
+        print(f"Loading model on device: {device}")
+        processor = Idefics3Processor.from_pretrained(model_id)
+        model = Idefics3ForConditionalGeneration.from_pretrained(
+            model_id,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            device_map="auto" if device == "cuda" else None
+        )
+        if device == "cpu":
+            model.to(device)
+    return processor, model
 
 def predict_skin_condition(image):
-    """
-    Analyze skin condition image and generate descriptive text.
-    """
+    """Analyze skin condition image and generate descriptive text."""
     try:
         if image is None:
             return "Please upload an image first."
-        
-        # Prepare image
+
+        processor, model = load_model()
+
         if isinstance(image, np.ndarray):
             image = Image.fromarray(image.astype('uint8'))
+
+        # Use Idefics3 chat template format
+        question = "Describe the skin condition shown in this image in detail."
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": question},
+                ],
+            }
+        ]
         
-        # Process image
-        prompt = "Describe the skin condition shown in this image:"
-        inputs = processor(text=prompt, images=image, return_tensors="pt").to(device)
-        
-        # Generate caption
+        prompt = processor.apply_chat_template(messages, add_generation_prompt=True)
+        inputs = processor(images=[image], text=prompt, return_tensors="pt")
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
         with torch.no_grad():
-            generated_ids = model.generate(
-                **inputs,
-                max_new_tokens=100,
-                do_sample=False,
-                temperature=0.7
-            )
+            generated_ids = model.generate(**inputs, max_new_tokens=128, do_sample=False)
+
+        response = processor.decode(generated_ids[0], skip_special_tokens=True)
         
-        caption = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        
-        # Clean up the output
-        if "Describe the skin condition" in caption:
-            caption = caption.replace("Describe the skin condition shown in this image:", "").strip()
-        
-        return caption if caption else "Unable to analyze the image. Please try another image."
-    
+        # Extract the assistant's response
+        if "Assistant:" in response:
+            response = response.split("Assistant:")[-1].strip()
+        elif question in response:
+            response = response.replace(question, "").strip()
+
+        return response if response else "Unable to analyze the image. Please try another image."
     except Exception as e:
         return f"Error: {str(e)}"
 
